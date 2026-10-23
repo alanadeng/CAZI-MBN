@@ -421,16 +421,16 @@ class Model(nn.Module):
                 # Setup NeighborLoader
                 loader = NeighborLoader(
                     sampling_data,
-                    num_neighbors=[15] * self.num_layers,
-                    batch_size=8,
+                    num_neighbors=[15, 10, 5],
+                    batch_size=512,
                     shuffle=True,
                     drop_last=False,
                 )
                 sampling_neg_data = Data(x=x[i], edge_index=edge_neg_index[i])
                 neg_loader = NeighborLoader(
-                    sampling_neg_data ,
-                    num_neighbors=[15] * self.num_layers,
-                    batch_size=8,
+                    sampling_neg_data,
+                    num_neighbors=[15, 10, 5],
+                    batch_size=512,
                     shuffle=True,
                     drop_last=False,
                 )
