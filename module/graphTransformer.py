@@ -8,21 +8,31 @@ class GraphTransformer(nn.Module):
         super(GraphTransformer, self).__init__()
         self.layers = nn.ModuleList()
         self.norms = nn.ModuleList()
+        self.residuals = nn.ModuleList()
 
+        first_channels = hidden_channels * heads
         self.layers.append(TransformerConv(in_channels, hidden_channels, heads=heads, concat=True, dropout=dropout, bias=bias))
-        self.norms.append(LayerNorm(hidden_channels * heads))
+        self.norms.append(LayerNorm(first_channels, mode='node'))
+        self.residuals.append(
+            nn.Identity() if in_channels == first_channels
+            else nn.Linear(in_channels, first_channels, bias=False)
+        )
 
         for _ in range(1, num_layers - 1):
             self.layers.append(TransformerConv(hidden_channels * heads, hidden_channels, heads=heads, concat=True, dropout=dropout, bias=bias))
-            self.norms.append(LayerNorm(hidden_channels * heads))
+            self.norms.append(LayerNorm(hidden_channels * heads, mode='node'))
+            self.residuals.append(nn.Identity())
 
         self.layers.append(TransformerConv(hidden_channels * heads, out_channels, heads=heads, concat=False, dropout=dropout, bias=bias))
-        self.norms.append(LayerNorm(out_channels))
+        self.norms.append(LayerNorm(out_channels, mode='node'))
+        self.residuals.append(
+            nn.Identity() if hidden_channels * heads == out_channels
+            else nn.Linear(hidden_channels * heads, out_channels, bias=False)
+        )
 
     def forward(self, x, edge_index):
-        for layer, norm in zip(self.layers, self.norms):
-            x = layer(x, edge_index)
-            x = norm(x)
-            x = F.relu(x, inplace=True)
+        for layer, norm, residual in zip(self.layers, self.norms, self.residuals):
+            x = layer(x, edge_index) + residual(x)
+            x = torch.sigmoid(norm(x))
 
         return x

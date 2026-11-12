@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,7 +26,7 @@ class FocalLoss(nn.Module):
 
 
 class KDLoss(nn.Module):
-    def __init__(self, dweight=0.5, sweight=0.5):
+    def __init__(self, dweight=1.0, sweight=1.0):
         super(KDLoss, self).__init__()
         self.dweight = dweight
         self.sweight = sweight
@@ -34,14 +35,20 @@ class KDLoss(nn.Module):
     def forward(self, student_logits, teacher_logits, student_loss, is_teacher):
         if is_teacher:
             return student_loss
-        else:
-            distillation_loss = self.mse(student_logits, teacher_logits)
-            total_loss = self.dweight * distillation_loss + self.sweight * student_loss
-            return total_loss
+        if teacher_logits is None:
+            raise ValueError("teacher_logits are required when distilling the student.")
+        if student_logits.shape != teacher_logits.shape:
+            raise ValueError(
+                f"Student and teacher representations must have matching shapes; "
+                f"got {student_logits.shape} and {teacher_logits.shape}."
+            )
+
+        distillation_loss = self.mse(student_logits, teacher_logits.detach())
+        return self.dweight * distillation_loss + self.sweight * student_loss
 
 
 class MultiLabelSoftMarginLoss(nn.Module):
-    def __init__(self, reduction: str = "mean", pos_weight: torch.Tensor | None = None):
+    def __init__(self, reduction: str = "mean", pos_weight: Optional[torch.Tensor] = None):
         super().__init__()
         if reduction not in ("none", "mean", "sum"):
             raise ValueError("reduction must be one of: 'none', 'mean', 'sum'")

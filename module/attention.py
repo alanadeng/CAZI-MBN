@@ -23,25 +23,65 @@ class Attention(nn.Module):
 
         return feat_pos, feat_neg, summary
 
-    def attn_feature(self, features):
-        features_attn = []
-        for i in range(self.nb_graphs):
-            features_attn.append(self.A[i](features[i].squeeze()))
-        features_attn = F.softmax(torch.cat(features_attn, 1), -1)
-        features = torch.cat(features, 1).squeeze(0)
-        features_attn_reshaped = features_attn.transpose(1, 0).contiguous().view(-1, 1)
-        features = features * features_attn_reshaped.expand_as(features)
-        features = features.view(self.nb_graphs, self.nb_nodes, self.hid_units).sum(0).unsqueeze(0)
+    def aggregate(self, features, mask=None):
+        if not isinstance(features, torch.Tensor):
+            features = torch.stack(features, dim=0)
+        if features.dim() != 3:
+            raise ValueError(f"features must have shape (layers, nodes, channels), got {features.shape}.")
+        if features.size(0) != self.nb_graphs or features.size(2) != self.hid_units:
+            raise ValueError(
+                f"Expected {self.nb_graphs} layers with {self.hid_units} channels, "
+                f"got {features.size(0)} layers with {features.size(2)} channels."
+            )
+        if features.size(1) != self.nb_nodes:
+            raise ValueError(
+                f"Expected {self.nb_nodes} nodes per layer, got {features.size(1)}."
+            )
 
-        return features, features_attn
+        scores = torch.cat([
+            self.A[index](features[index])
+            for index in range(self.nb_graphs)
+        ], dim=1)
+        if mask is None:
+            weights = F.softmax(scores, dim=1)
+        else:
+            if mask.shape != scores.shape:
+                raise ValueError(
+                    f"mask must have shape {tuple(scores.shape)}, got {tuple(mask.shape)}."
+                )
+            mask = mask.to(device=scores.device, dtype=torch.bool)
+            has_layer = mask.any(dim=1, keepdim=True)
+            scores = scores.masked_fill(~mask, float('-inf'))
+            scores = torch.where(has_layer, scores, torch.zeros_like(scores))
+            weights = F.softmax(scores, dim=1) * has_layer
+        aggregated = (
+            features * weights.transpose(0, 1).unsqueeze(-1)
+        ).sum(dim=0)
+        return aggregated, weights
+
+    def attn_feature(self, features):
+        if not isinstance(features, torch.Tensor):
+            features = torch.stack(features, dim=0)
+        if features.dim() == 4 and features.size(1) == 1:
+            features = features.squeeze(1)
+        aggregated, weights = self.aggregate(features)
+        return aggregated.unsqueeze(0), weights
 
     def attn_summary(self, features):
-        features_attn = []
-        for i in range(self.nb_graphs):
-            features_attn.append(self.A[i](features[i].squeeze()))
-        features_attn = F.softmax(torch.cat(features_attn), dim=-1).unsqueeze(1)
-        features = torch.cat(features, 0)
-        features_attn_expanded = features_attn.expand_as(features)
-        features = (features * features_attn_expanded).sum(0).unsqueeze(0)
+        if not isinstance(features, torch.Tensor):
+            features = torch.stack(features, dim=0)
+        if features.dim() == 4 and features.size(1) == 1:
+            features = features.squeeze(1)
+        if features.dim() != 3 or features.size(0) != self.nb_graphs:
+            raise ValueError(
+                f"features must have shape ({self.nb_graphs}, nodes, channels), got {features.shape}."
+            )
 
-        return features, features_attn
+        layer_summaries = features.mean(dim=1)
+        scores = torch.cat([
+            self.A[index](layer_summaries[index])
+            for index in range(self.nb_graphs)
+        ], dim=0)
+        weights = F.softmax(scores, dim=0).unsqueeze(-1)
+        summary = (layer_summaries * weights).sum(dim=0, keepdim=True)
+        return summary, weights
